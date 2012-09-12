@@ -1,0 +1,122 @@
+#!/usr/bin/env python2
+
+from lvmro import lvmro
+import os
+import subprocess
+import re
+
+FLASH_DRIVE = 'sde'
+SPINNING_DRIVES = ['sda','sdb','sdc','sdd']
+RAID_HEX = "fd00"
+LVM_HEX = "8e00"
+VOLUME_SIZE = "16G"
+START_SECTOR = "2048"
+VOLUME_GROUP = "vg-os"
+
+class PartitionFailedError(Exception):
+    pass
+
+class LvmCreationError(Exception):
+    pass
+
+class LvmDeletionError(Exception):
+    pass
+
+class PvDeletionError(Exception):
+    pass
+
+class VgDeletionError(Exception):
+    pass
+
+class RaidCreationError(Exception):
+    pass
+
+class RaidDeletionError(Exception):
+    pass
+
+def build_raid():
+    command = "mdadm --create /dev/md0 -v --raid-devices=4 --level=raid10 {}"
+    devices = ["/dev/" + d + "1" for d in SPINNING_DRIVES]
+    if subprocess.call(command.format(' '.join(devices)), shell=True) != 0:
+        raise RaidCreationError
+    if os.path.exists("/dev/md0p1"):
+        if subprocess.call("sgdisk -d 1 /dev/md0",shell=True) != 0:
+            raise RaidCreationError
+
+def build_lvm():
+    #FIXME get some exceptions all up in here
+    first_sector = subprocess.check_output("sgdisk -F /dev/md0",            \
+            shell=True).rstrip()
+    last_sector = subprocess.check_output("sgdisk -E /dev/md0",             \
+            shell=True).rstrip()
+    if subprocess.call("sgdisk -n 1:{}:{} /dev/md0".format(first_sector,    \
+            last_sector),shell=True):
+        raise LvmCreationError
+    if subprocess.call("sgdisk -t 1:{} /dev/md0".format(LVM_HEX),shell=True) != 0:
+        raise LvmCreationError
+    if subprocess.call("pvcreate /dev/md0p1",shell=True) != 0:
+        raise LvmCreationError
+    if subprocess.call("vgcreate {} /dev/md0p1".format(VOLUME_GROUP),       \
+            shell=True) != 0:
+        raise LvmCreationError
+
+def destroy_existing_lvm():
+    logical_volumes = lvmro.list_logical_volumes()
+    volume_groups = lvmro.list_volume_groups()
+    physical_volumes = lvmro.list_physical_volumes()
+
+    for lv in logical_volumes:
+        if subprocess.call("lvremove -f {}".format(lv), shell=True) != 0:
+            raise LvmDeletionError
+
+    for vg in volume_groups:
+        if subprocess.call("vgremove -f {}".format(vg), shell=True) != 0:
+            raise VgDeletionError
+
+    for pv in physical_volumes:
+        if subprocess.call("pvremove -f {}".format(pv), shell=True) != 0:
+            raise PvDeletionError
+
+def destroy_existing_raid():
+    devices = os.listdir('/dev/')    
+    arrays = []
+    pattern = re.compile("^md[0-9]$")
+    for d in devices:
+        if pattern.search(d):
+            if subprocess.call("mdadm --stop /dev/{}".format(d),shell=True) != 0:
+                raise RaidDeletionError
+            # FIXME Instead of parsing out the drives that are members of this
+            # array, I'm going to just zero the superblocks on the partitions
+            # that I expect to be configured.  This is cheesy, but solves 
+            # the immediate problem
+            for sd in SPINNING_DRIVES:
+               raid_partition = sd + "1"
+               zero_superblock(raid_partition)
+
+
+def partition_drive(drive):
+    command = []
+    command.append("sgdisk -Z /dev/{}".format(drive))
+    command.append("sgdisk -o /dev/{}".format(drive))
+    command.append("sgdisk -n 1:{}:+{} /dev/{}".format( \
+            START_SECTOR, VOLUME_SIZE, drive))
+    command.append("sgdisk -t 1:{} /dev/{}".format(RAID_HEX, drive))
+    
+    for c in command:
+        if subprocess.call(c, shell=True) != 0:
+            raise PartitionFailedError
+
+def zero_superblock(partition):
+    command = "mdadm --zero-superblock /dev/{}".format(partition)
+    if subprocess.call(command,shell=True) != 0:
+        raise RaidDeletionError
+
+def main():
+    destroy_existing_lvm()
+    destroy_existing_raid()
+    for d in SPINNING_DRIVES:
+        partition_drive(d)
+    build_raid()
+    build_lvm()
+
+main()
