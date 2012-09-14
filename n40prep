@@ -45,6 +45,8 @@ def build_raid():
 
 def build_lvm():
     #FIXME get some exceptions all up in here
+    if subprocess.call("sgdisk -o /dev/md0", shell=True) != 0:
+      raise LvmCreationError
     first_sector = subprocess.check_output("sgdisk -F /dev/md0",            \
             shell=True).rstrip()
     last_sector = subprocess.check_output("sgdisk -E /dev/md0",             \
