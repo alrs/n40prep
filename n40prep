@@ -12,10 +12,16 @@ LVM_HEX = "8e00"
 VOLUME_SIZE = "16G"
 START_SECTOR = "2048"
 SWAP_SIZE = "16g"
+SWAP_VOLUME = "lv-swap"
 VAR_SIZE = "12g"
+VAR_VOLUME = "lv-var"
 TMP_SIZE = "1g"
+TMP_VOLUME = "lv-tmp"
 
 VOLUME_GROUP = "vg-os"
+
+class FormatFailedError(Exception):
+    pass
 
 class PartitionFailedError(Exception):
     pass
@@ -63,6 +69,16 @@ def build_pv():
     if subprocess.call("pvcreate /dev/md0p1",shell=True) != 0:
         raise LvmCreationError
 
+def build_fs():
+    swap = "mkswap /dev/{}/{}"
+    ext4 = "mkfs.ext4 /dev/{}/{}"
+    if subprocess.call(swap.format(VOLUME_GROUP, SWAP_VOLUME),shell=True) != 0:
+	raise FormatFailedError
+    if subprocess.call(ext4.format(VOLUME_GROUP, TMP_VOLUME),shell=True) != 0:
+	raise FormatFailedError
+    if subprocess.call(ext4.format(VOLUME_GROUP, VAR_VOLUME),shell=True) != 0:
+	raise FormatFailedError
+
 def build_vg():
     if subprocess.call("vgcreate {} /dev/md0p1".format(VOLUME_GROUP),       \
             shell=True) != 0:
@@ -70,11 +86,11 @@ def build_vg():
 
 def build_lv():
     command = "lvcreate -L {} -n {} {} " # size, name, volume group
-    if subprocess.call(command.format(SWAP_SIZE, "lv-swap", VOLUME_GROUP),shell=True) != 0:
+    if subprocess.call(command.format(SWAP_SIZE, SWAP_VOLUME, VOLUME_GROUP),shell=True) != 0:
 	raise LvmCreationError	
-    if subprocess.call(command.format(VAR_SIZE, "lv-var", VOLUME_GROUP),shell=True) != 0:
+    if subprocess.call(command.format(VAR_SIZE, VAR_VOLUME, VOLUME_GROUP),shell=True) != 0:
 	raise LvmCreationError	
-    if subprocess.call(command.format(TMP_SIZE, "lv-tmp", VOLUME_GROUP),shell=True) != 0:
+    if subprocess.call(command.format(TMP_SIZE, TMP_VOLUME, VOLUME_GROUP),shell=True) != 0:
 	raise LvmCreationError	
   
 def destroy_existing_lvm():
@@ -137,5 +153,6 @@ def main():
     build_pv()
     build_vg()
     build_lv()
+    build_fs()
 
 main()
