@@ -59,7 +59,7 @@ def build_pv():
     if subprocess.call("pvcreate /dev/md0p1",shell=True) != 0:
         raise LvmCreationError
 
-def vg_create():
+def build_vg():
     if subprocess.call("vgcreate {} /dev/md0p1".format(VOLUME_GROUP),       \
             shell=True) != 0:
         raise LvmCreationError
