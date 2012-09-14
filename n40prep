@@ -70,7 +70,7 @@ def build_vg():
 
 def build_lv():
     command = "lvcreate -L {} -n {} {} " # size, name, volume group
-    if subprocess.call(command.format(SWAP_SIZE, "lv-swap", VOLUME_GROUP,shell=True) != 0:
+    if subprocess.call(command.format(SWAP_SIZE, "lv-swap", VOLUME_GROUP),shell=True) != 0:
 	raise LvmCreationError	
     if subprocess.call(command.format(VAR_SIZE, "lv-var", VOLUME_GROUP),shell=True) != 0:
 	raise LvmCreationError	
