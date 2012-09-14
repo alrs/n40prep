@@ -43,7 +43,7 @@ def build_raid():
         if subprocess.call("sgdisk -d 1 /dev/md0",shell=True) != 0:
             raise RaidCreationError
 
-def build_lvm():
+def build_pv():
     #FIXME get some exceptions all up in here
     if subprocess.call("sgdisk -o /dev/md0", shell=True) != 0:
       raise LvmCreationError
@@ -58,9 +58,12 @@ def build_lvm():
         raise LvmCreationError
     if subprocess.call("pvcreate /dev/md0p1",shell=True) != 0:
         raise LvmCreationError
+
+def vg_create():
     if subprocess.call("vgcreate {} /dev/md0p1".format(VOLUME_GROUP),       \
             shell=True) != 0:
         raise LvmCreationError
+
 
 def destroy_existing_lvm():
     logical_volumes = lvmro.list_logical_volumes()
@@ -119,6 +122,7 @@ def main():
     for d in SPINNING_DRIVES:
         partition_drive(d)
     build_raid()
-    build_lvm()
+    build_pv()
+    build_vg()
 
 main()
