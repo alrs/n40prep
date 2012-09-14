@@ -11,6 +11,10 @@ RAID_HEX = "fd00"
 LVM_HEX = "8e00"
 VOLUME_SIZE = "16G"
 START_SECTOR = "2048"
+SWAP_SIZE = "16g"
+VAR_SIZE = "12g"
+TMP_SIZE = "1g"
+
 VOLUME_GROUP = "vg-os"
 
 class PartitionFailedError(Exception):
@@ -64,7 +68,15 @@ def build_vg():
             shell=True) != 0:
         raise LvmCreationError
 
-
+def build_lv():
+    command = "lvcreate -L {} -n {} {} " # size, name, volume group
+    if subprocess.call(command.format(SWAP_SIZE, "lv-swap", VOLUME_GROUP,shell=True) != 0:
+	raise LvmCreationError	
+    if subprocess.call(command.format(VAR_SIZE, "lv-var", VOLUME_GROUP),shell=True) != 0:
+	raise LvmCreationError	
+    if subprocess.call(command.format(TMP_SIZE, "lv-tmp", VOLUME_GROUP),shell=True) != 0:
+	raise LvmCreationError	
+  
 def destroy_existing_lvm():
     logical_volumes = lvmro.list_logical_volumes()
     volume_groups = lvmro.list_volume_groups()
@@ -124,5 +136,6 @@ def main():
     build_raid()
     build_pv()
     build_vg()
+    build_lv()
 
 main()
