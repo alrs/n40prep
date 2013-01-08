@@ -89,7 +89,7 @@ def build_pv():
     if subprocess.call(CMD_CREATE_PV,shell=True) != 0:
         raise LvmCreationError
 
-def device(drive):
+def drive_device(drive):
     return (''.join(['/dev/',drive]))
 
 def find_old_raids():
@@ -120,12 +120,12 @@ def get_last_sector(device):
 
 def partition_drive(drive):
     # clearing the drive fails once, succeeds twice 
-    subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device(drive)),shell=True)
-    if (subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device(drive)),
+    subprocess.call(TEMPLATE_CLEAR_DRIVE.format(drive_device(drive)),shell=True)
+    if (subprocess.call(TEMPLATE_CLEAR_DRIVE.format(drive_device(drive)),
         shell=True) != 0):
         raise PartitionClearError
 
-    start_sector = get_first_sector(device(drive))
+    start_sector = get_first_sector(drive_device(drive))
     partition_size = ''.join(["+",str(RAID_PARTITION_GIGS),"g"])
 
     command = []
@@ -158,7 +158,7 @@ def main():
             stop_existing_raid(a)
     print("partitioning drives")
     for d in SPINNING_DRIVES:
-       print device(d)
+       print drive_device(d)
        partition_drive(d) 
     print("building raid")
     build_raid(RAID_DEVICES)
