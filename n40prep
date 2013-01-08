@@ -1,24 +1,43 @@
 #!/usr/bin/env python2
 
-from lvmro import lvmro
 import os
 import subprocess
 import re
 
+BINARY_DEPENDENCIES = ["mdadm", "sgdisk", "pvcreate"]
 FLASH_DRIVE = 'sde'
 SPINNING_DRIVES = ['sda','sdb','sdc','sdd']
+RAID_DEVICES = ["/dev/" + d + "1" for d in SPINNING_DRIVES]
 RAID_HEX = "fd00"
 LVM_HEX = "8e00"
-VOLUME_SIZE = "16G"
-START_SECTOR = "2048"
-SWAP_SIZE = "16g"
-SWAP_VOLUME = "lv-swap"
-VAR_SIZE = "12g"
-VAR_VOLUME = "lv-var"
-TMP_SIZE = "1g"
-TMP_VOLUME = "lv-tmp"
-
+RAID_PARTITION_GIGS = 16
+ROOT_VOLUME_GIGS = 32
+ROOT_VOLUME = "root"
+SWAP_VOLUME = "os_swap_1"
+SWAP_VOLUME_GIGS = 4
 VOLUME_GROUP = "vg-os"
+
+TEMPLATE_BUILD_RAID = "mdadm --create /dev/md0 -v --raid-devices=4 --level=raid10 {}"
+TEMPLATE_CREATE_PARTITION = "sgdisk -n 1:{}:{} /dev/{} 2>&1 > /dev/null"
+TEMPLATE_PART_TYPE = "sgdisk -t 1:{} /dev/{} 2>&1 > /dev/null"
+TEMPLATE_STOP_RAID = "mdadm --stop /dev/{}"
+TEMPLATE_CLEAR_DRIVE = "sgdisk -o {} 2>&1 > /dev/null"
+TEMPLATE_ZAP_DRIVE = "sgdisk -z {} > /dev/null"
+TEMPLATE_WHICH = "which {} 2>&1 > /dev/null"
+TEMPLATE_FIRST_SECTOR = "sgdisk -F {}"
+TEMPLATE_LAST_SECTOR = "sgdisk -E {}" 
+
+CMD_CREATE_PV = "pvcreate /dev/md0p1"
+CMD_DELETE_PARTITION = "sgdisk -d 1 /dev/md0"
+
+class BinaryUnavailableError(Exception):
+    pass
+
+class FirstAvailableSectorError(Exception):
+    pass
+
+class LastAvailableSectorError(Exception):
+    pass
 
 class FormatFailedError(Exception):
     pass
@@ -32,108 +51,99 @@ class LvmCreationError(Exception):
 class LvmDeletionError(Exception):
     pass
 
-class PvDeletionError(Exception):
-    pass
-
-class VgDeletionError(Exception):
+class PartitionClearError(Exception):
     pass
 
 class RaidCreationError(Exception):
     pass
 
-class RaidDeletionError(Exception):
+class RaidStopError(Exception):
     pass
 
-def build_raid():
-    command = "mdadm --create /dev/md0 -v --raid-devices=4 --level=raid10 {}"
-    devices = ["/dev/" + d + "1" for d in SPINNING_DRIVES]
-    if subprocess.call(command.format(' '.join(devices)), shell=True) != 0:
+def binary_available(binary):
+    if subprocess.call(TEMPLATE_WHICH.format(binary),shell=True) != 0:
+        raise BinaryUnavailableError
+    return True
+
+def build_raid(devices):
+    if subprocess.call(TEMPLATE_BUILD_RAID.format(' '.join(devices)),
+                       shell=True) != 0:
         raise RaidCreationError
-    if os.path.exists("/dev/md0p1"):
-        if subprocess.call("sgdisk -d 1 /dev/md0",shell=True) != 0:
-            raise RaidCreationError
+    return True
 
 def build_pv():
     #FIXME get some exceptions all up in here
-    if subprocess.call("sgdisk -o /dev/md0", shell=True) != 0:
+    if subprocess.call(CMD_BLANK_PARTITIONS, shell=True) != 0:
       raise LvmCreationError
-    first_sector = subprocess.check_output("sgdisk -F /dev/md0",            \
+    # THIS IS ALL BROKEN BECAUSE OF CHANGE TO TEMPLATE_FIRST_SECTOR
+    # AND TEMPLATE_LAST_SECTOR
+    first_sector = subprocess.check_output(CMD_GET_FIRST_SECTOR,
             shell=True).rstrip()
-    last_sector = subprocess.check_output("sgdisk -E /dev/md0",             \
+    last_sector = subprocess.check_output(CMD_GET_LAST_SECTOR,
             shell=True).rstrip()
-    if subprocess.call("sgdisk -n 1:{}:{} /dev/md0".format(first_sector,    \
-            last_sector),shell=True):
+    if subprocess.call(TEMPLATE_CREATE_PARTITION.format(first_sector,
+            last_sector, "md0"),shell=True):
         raise LvmCreationError
-    if subprocess.call("sgdisk -t 1:{} /dev/md0".format(LVM_HEX),shell=True) != 0:
+    if subprocess.call(TEMPLATE_PART_TYPE.format(LVM_HEX,"md0"),shell=True) != 0:
         raise LvmCreationError
-    if subprocess.call("pvcreate /dev/md0p1",shell=True) != 0:
-        raise LvmCreationError
-
-def build_fs():
-    swap = "mkswap /dev/{}/{}"
-    ext4 = "mkfs.ext4 /dev/{}/{}"
-    if subprocess.call(swap.format(VOLUME_GROUP, SWAP_VOLUME),shell=True) != 0:
-	raise FormatFailedError
-    if subprocess.call(ext4.format(VOLUME_GROUP, TMP_VOLUME),shell=True) != 0:
-	raise FormatFailedError
-    if subprocess.call(ext4.format(VOLUME_GROUP, VAR_VOLUME),shell=True) != 0:
-	raise FormatFailedError
-
-def build_vg():
-    if subprocess.call("vgcreate {} /dev/md0p1".format(VOLUME_GROUP),       \
-            shell=True) != 0:
+    if subprocess.call(CMD_CREATE_PV,shell=True) != 0:
         raise LvmCreationError
 
-def build_lv():
-    command = "lvcreate -L {} -n {} {} " # size, name, volume group
-    if subprocess.call(command.format(SWAP_SIZE, SWAP_VOLUME, VOLUME_GROUP),shell=True) != 0:
-	raise LvmCreationError	
-    if subprocess.call(command.format(VAR_SIZE, VAR_VOLUME, VOLUME_GROUP),shell=True) != 0:
-	raise LvmCreationError	
-    if subprocess.call(command.format(TMP_SIZE, TMP_VOLUME, VOLUME_GROUP),shell=True) != 0:
-	raise LvmCreationError	
-  
-def destroy_existing_lvm():
-    logical_volumes = lvmro.list_logical_volumes()
-    volume_groups = lvmro.list_volume_groups()
-    physical_volumes = lvmro.list_physical_volumes()
+def device(drive):
+    return (''.join(['/dev/',drive]))
 
-    for lv in logical_volumes:
-        if subprocess.call("lvremove -f {}".format(lv), shell=True) != 0:
-            raise LvmDeletionError
-
-    for vg in volume_groups:
-        if subprocess.call("vgremove -f {}".format(vg), shell=True) != 0:
-            raise VgDeletionError
-
-    for pv in physical_volumes:
-        if subprocess.call("pvremove -f {}".format(pv), shell=True) != 0:
-            raise PvDeletionError
-
-def destroy_existing_raid():
+def find_old_raids():
     devices = os.listdir('/dev/')    
     arrays = []
     pattern = re.compile("^md[0-9]$")
     for d in devices:
         if pattern.search(d):
-            if subprocess.call("mdadm --stop /dev/{}".format(d),shell=True) != 0:
-                raise RaidDeletionError
-            # FIXME Instead of parsing out the drives that are members of this
-            # array, I'm going to just zero the superblocks on the partitions
-            # that I expect to be configured.  This is cheesy, but solves 
-            # the immediate problem
-            for sd in SPINNING_DRIVES:
-               raid_partition = sd + "1"
-               zero_superblock(raid_partition)
+            arrays.append(d)
+    return arrays
 
+def stop_array(raid_array):
+    if subprocess.call(TEMPLATE_STOP_RAID.format(raid_array),
+                       shell=True) != 0:
+        raise RaidStopError
+    # FIXME Instead of parsing out the drives that are members of this
+    # array, I'm going to just zero the superblocks on the partitions
+    # that I expect to be configured.  This is cheesy, but solves 
+    # the immediate problem
+    #for sd in SPINNING_DRIVES:
+    #   raid_partition = sd + "1"
+    #   zero_superblock(raid_partition)
+
+def get_first_sector(device):
+    output = subprocess.check_output(TEMPLATE_FIRST_SECTOR.format(device),
+                                     shell=True).rstrip()
+    if output.isdigit() == False:
+        raise FirstAvailableSectorError
+
+    return output
+
+def get_last_sector(device):
+    output = (subprocess.check_output(TEMPLATE_LAST_SECTOR.format(device),
+              shell=True)).rstrip()
+
+    if output.isdigit() == False:
+        raise LastAvailableSectorError
+
+    return output
 
 def partition_drive(drive):
+    # clearing the drive fails once, succeeds twice 
+    subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device(drive)),shell=True)
+    if (subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device(drive)),
+        shell=True) != 0):
+        raise PartitionClearError
+
+    start_sector = get_first_sector(device(drive))
+    partition_size = ''.join(["+",str(RAID_PARTITION_GIGS),"g"])
+
     command = []
-    command.append("sgdisk -Z /dev/{}".format(drive))
-    command.append("sgdisk -o /dev/{}".format(drive))
-    command.append("sgdisk -n 1:{}:+{} /dev/{}".format( \
-            START_SECTOR, VOLUME_SIZE, drive))
-    command.append("sgdisk -t 1:{} /dev/{}".format(RAID_HEX, drive))
+    command.append(TEMPLATE_CREATE_PARTITION.format(start_sector, 
+                   partition_size, drive))
+    command.append(TEMPLATE_PART_TYPE.format(RAID_HEX, drive))
     
     for c in command:
         if subprocess.call(c, shell=True) != 0:
@@ -145,14 +155,19 @@ def zero_superblock(partition):
         raise RaidDeletionError
 
 def main():
-    destroy_existing_lvm()
-    destroy_existing_raid()
+    for b in BINARY_DEPENDENCIES:
+        binary_available(b)
+
+    arrays = find_old_raids()
+    if len(arrays) > 0:
+        print("stopping existing raids.")
+        for a in arrays:
+            stop_existing_raid(a)
+    print("partitioning drives")
     for d in SPINNING_DRIVES:
-        partition_drive(d)
-    build_raid()
-    build_pv()
-    build_vg()
-    build_lv()
-    build_fs()
+       print device(d)
+       partition_drive(d) 
+    print("building raid")
+    build_raid(RAID_DEVICES)
 
 main()
