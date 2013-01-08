@@ -101,18 +101,6 @@ def find_old_raids():
             arrays.append(d)
     return arrays
 
-def stop_array(raid_array):
-    if subprocess.call(TEMPLATE_STOP_RAID.format(raid_array),
-                       shell=True) != 0:
-        raise RaidStopError
-    # FIXME Instead of parsing out the drives that are members of this
-    # array, I'm going to just zero the superblocks on the partitions
-    # that I expect to be configured.  This is cheesy, but solves 
-    # the immediate problem
-    #for sd in SPINNING_DRIVES:
-    #   raid_partition = sd + "1"
-    #   zero_superblock(raid_partition)
-
 def get_first_sector(device):
     output = subprocess.check_output(TEMPLATE_FIRST_SECTOR.format(device),
                                      shell=True).rstrip()
@@ -148,6 +136,11 @@ def partition_drive(drive):
     for c in command:
         if subprocess.call(c, shell=True) != 0:
             raise PartitionFailedError
+
+def stop_array(raid_array):
+    if subprocess.call(TEMPLATE_STOP_RAID.format(raid_array),
+                       shell=True) != 0:
+        raise RaidStopError
 
 def zero_superblock(partition):
     command = "mdadm --zero-superblock /dev/{}".format(partition)
