@@ -4,20 +4,23 @@ import os
 import re
 import subprocess
 
-BINARY_DEPENDENCIES = ["mdadm", "sgdisk", "pvcreate"]
+BINARY_DEPENDENCIES = ["mdadm", "sgdisk", "pvcreate", "pvmove",
+                       "vgextend", "vgreduce", "lvextend", "swapon",
+                       "swapoff", "mkswap"]
 SPINNING_DRIVE_DEVICES = ['/dev/sda','/dev/sdb','/dev/sdc','/dev/sdd']
 RAID_DEVICES = [d + "1" for d in SPINNING_DRIVE_DEVICES]
 RAID_HEX = "fd00"
 LVM_HEX = "8e00"
 LVM_RAID_DEVICE = "/dev/md0"
-LVM_VOLUME_DEVICE_SOURCE = "/dev/sde2"
+LVM_VOLUME_DEVICE_SOURCE = "/dev/sde5"
 LVM_VOLUME_DEVICE_TARGET = "/dev/md0p1"
 RAID_PARTITION_GIGS = 16
+ROOT_PARTITION_GIGS = 24
+SWAP_PARTITION_GIGS = 2
 ROOT_VOLUME = "root"
-SWAP_VOLUME = "os_swap_1"
+SWAP_VOLUME = "swap_1"
 VOLUME_GROUP = "vg-os"
 
-#TEMPLATE_BUILD_RAID = "mdadm --create /dev/md0 -v --raid-devices=4 --level=raid10 {}"
 TEMPLATE_BUILD_RAID = "mdadm --create {} -v --raid-devices={} --level=raid{} {}"
 TEMPLATE_CREATE_PARTITION = "sgdisk -n {}:{}:{} {} 2>&1 > /dev/null"
 TEMPLATE_PART_TYPE = "sgdisk -t {}:{} {} 2>&1 > /dev/null"
@@ -29,6 +32,13 @@ TEMPLATE_FIRST_SECTOR = "sgdisk -F {}"
 TEMPLATE_LAST_SECTOR = "sgdisk -E {}" 
 TEMPLATE_CREATE_PV = "pvcreate {}"
 TEMPLATE_VGEXTEND = "vgextend {} {}"
+TEMPLATE_PVMOVE = "pvmove {}"
+TEMPLATE_VGREDUCE = "vgreduce {} {}"
+TEMPLATE_LVEXTEND = "lvextend -L{}GB {}"
+TEMPLATE_RESIZE2FS = "resize2fs {}"
+TEMPLATE_SWAPON = "swapon {}"
+TEMPLATE_SWAPOFF = "swapoff {}"
+TEMPLATE_MKSWAP = "mkswap {}"
 
 class BinaryUnavailableError(Exception):
     pass
@@ -36,10 +46,16 @@ class BinaryUnavailableError(Exception):
 class ExtendVolumeError(Exception):
     pass
 
+class ExtendVolumeGroupError(Exception):
+    pass
+
 class FirstAvailableSectorError(Exception):
     pass
 
 class LastAvailableSectorError(Exception):
+    pass
+
+class MovePhysicalVolumeError(Exception):
     pass
 
 class FormatFailedError(Exception):
@@ -54,6 +70,9 @@ class LvmCreationError(Exception):
 class LvmDeletionError(Exception):
     pass
 
+class MkswapError(Exception):
+    pass
+
 class PartitionClearError(Exception):
     pass
 
@@ -61,6 +80,18 @@ class RaidCreationError(Exception):
     pass
 
 class RaidStopError(Exception):
+    pass
+
+class ResizeFilesystemError(Exception):
+    pass
+
+class SwaponError(Exception):
+    pass
+
+class SwapoffError(Exception):
+    pass
+
+class VolumeGroupReduceError(Exception):
     pass
 
 def binary_available(binary):
@@ -94,10 +125,17 @@ def clear_device(device):
 
     return True
 
+def extend_lv(volume, size):
+    gigs = str(size)
+    if subprocess.call(TEMPLATE_LVEXTEND.format(gigs, volume), 
+                       shell=True) != 0:
+        raise ExtendVolumeError
+    return True
+
 def extend_vg(volume,target_device):
     if subprocess.call(TEMPLATE_VGEXTEND.format(volume, target_device),
                        shell=True) != 0:
-        raise ExtendVolumeError
+        raise ExtendVolumeGroupError
     return True
 
 def find_old_raids():
@@ -126,6 +164,16 @@ def get_last_sector(device):
 
     return output
 
+def mkswap(device):
+    if subprocess.call(TEMPLATE_MKSWAP.format(device),shell=True) != 0:
+        raise MkswapError
+    return True
+
+def move_pv(device):
+    if (subprocess.call(TEMPLATE_PVMOVE.format(device),shell=True) != 0):
+        raise MovePhysicalVolumeError 
+    return True
+
 def partition_device(**kwargs):
     start = kwargs['start']
     stop = kwargs['stop']
@@ -140,10 +188,33 @@ def partition_device(**kwargs):
         raise PartitionFailedError
     return True
 
+def reduce_vg(group, device):
+    if subprocess.call(TEMPLATE_VGREDUCE.format(group,device),
+        shell=True) != 0:
+        raise VolumeGroupReduceError
+    return True
+
+def resize_fs(device):
+    if subprocess.call(TEMPLATE_RESIZE2FS.format(device),
+        shell=True) != 0:
+        raise ResizeFilsystemError
+    return True
+
 def stop_array(raid_array):
     if subprocess.call(TEMPLATE_STOP_RAID.format(raid_array),
                        shell=True) != 0:
         raise RaidStopError
+
+def swapoff(device):
+    print TEMPLATE_SWAPOFF.format(device)
+    if subprocess.call(TEMPLATE_SWAPOFF.format(device),shell=True) != 0:
+        raise SwapoffError
+    return True
+
+def swapon(device):
+    if subprocess.call(TEMPLATE_SWAPON.format(device),shell=True) != 0:
+        raise SwaponError
+    return True
 
 def main():
     for b in BINARY_DEPENDENCIES:
@@ -182,15 +253,34 @@ def main():
     print("building physical LVM volume")
     build_pv(LVM_VOLUME_DEVICE_TARGET)
 
-    #print("extending volume group")
-    #extend_vg(VOLUME_GROUP,LVM_VOLUME_DEVICE_TARGET)
+    print("extending existing volume group")
+    extend_vg(VOLUME_GROUP,LVM_VOLUME_DEVICE_TARGET)
 
-    #print("moving volume group to target")
-    #move_pv(LVM_VOLUME_DEVICE_SOURCE)
+    print("moving volume group to target")
+    move_pv(LVM_VOLUME_DEVICE_SOURCE)
 
-    #print("removing installation flash device from volume group")
-    #reduce_vg(LVM_VOLUME_DEVICE_SOURCE)
+    print("removing installation flash device from volume group")
+    reduce_vg(VOLUME_GROUP, LVM_VOLUME_DEVICE_SOURCE)
     
-    #print("resizing partition")
+    root_partition = os.path.join('/dev',VOLUME_GROUP,ROOT_VOLUME)
+    print("resizing root partition: " + root_partition)
+    extend_lv(root_partition, ROOT_PARTITION_GIGS)
+
+    print("resizing root filesystem: " + root_partition)
+    resize_fs(root_partition)
+
+    swap_partition = os.path.join('/dev', VOLUME_GROUP, SWAP_VOLUME)
+    print("swapoff: " + swap_partition)
+    swapoff(swap_partition)
+
+    print("resizing swap: " + swap_partition)
+    extend_lv(swap_partition, SWAP_PARTITION_GIGS)
+
+    print("rebuilding swap: " + swap_partition)
+    mkswap(swap_partition)
+
+    print("swapon: " + swap_partition)
+    swapon(swap_partition)
+    
 
 main()
