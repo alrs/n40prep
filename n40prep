@@ -1,36 +1,39 @@
 #!/usr/bin/env python2
 
 import os
-import subprocess
 import re
+import subprocess
 
 BINARY_DEPENDENCIES = ["mdadm", "sgdisk", "pvcreate"]
-FLASH_DRIVE = 'sde'
-SPINNING_DRIVES = ['sda','sdb','sdc','sdd']
-RAID_DEVICES = ["/dev/" + d + "1" for d in SPINNING_DRIVES]
+SPINNING_DRIVE_DEVICES = ['/dev/sda','/dev/sdb','/dev/sdc','/dev/sdd']
+RAID_DEVICES = [d + "1" for d in SPINNING_DRIVE_DEVICES]
 RAID_HEX = "fd00"
 LVM_HEX = "8e00"
+LVM_RAID_DEVICE = "/dev/md0"
+LVM_VOLUME_DEVICE_SOURCE = "/dev/sde2"
+LVM_VOLUME_DEVICE_TARGET = "/dev/md0p1"
 RAID_PARTITION_GIGS = 16
-ROOT_VOLUME_GIGS = 32
 ROOT_VOLUME = "root"
 SWAP_VOLUME = "os_swap_1"
-SWAP_VOLUME_GIGS = 4
 VOLUME_GROUP = "vg-os"
 
-TEMPLATE_BUILD_RAID = "mdadm --create /dev/md0 -v --raid-devices=4 --level=raid10 {}"
-TEMPLATE_CREATE_PARTITION = "sgdisk -n 1:{}:{} /dev/{} 2>&1 > /dev/null"
-TEMPLATE_PART_TYPE = "sgdisk -t 1:{} /dev/{} 2>&1 > /dev/null"
-TEMPLATE_STOP_RAID = "mdadm --stop /dev/{}"
+#TEMPLATE_BUILD_RAID = "mdadm --create /dev/md0 -v --raid-devices=4 --level=raid10 {}"
+TEMPLATE_BUILD_RAID = "mdadm --create {} -v --raid-devices={} --level=raid{} {}"
+TEMPLATE_CREATE_PARTITION = "sgdisk -n {}:{}:{} {} 2>&1 > /dev/null"
+TEMPLATE_PART_TYPE = "sgdisk -t {}:{} {} 2>&1 > /dev/null"
+TEMPLATE_STOP_RAID = "mdadm --stop {}"
 TEMPLATE_CLEAR_DRIVE = "sgdisk -o {} 2>&1 > /dev/null"
 TEMPLATE_ZAP_DRIVE = "sgdisk -z {} > /dev/null"
 TEMPLATE_WHICH = "which {} 2>&1 > /dev/null"
 TEMPLATE_FIRST_SECTOR = "sgdisk -F {}"
 TEMPLATE_LAST_SECTOR = "sgdisk -E {}" 
-
-CMD_CREATE_PV = "pvcreate /dev/md0p1"
-CMD_DELETE_PARTITION = "sgdisk -d 1 /dev/md0"
+TEMPLATE_CREATE_PV = "pvcreate {}"
+TEMPLATE_VGEXTEND = "vgextend {} {}"
 
 class BinaryUnavailableError(Exception):
+    pass
+
+class ExtendVolumeError(Exception):
     pass
 
 class FirstAvailableSectorError(Exception):
@@ -65,32 +68,37 @@ def binary_available(binary):
         raise BinaryUnavailableError
     return True
 
-def build_raid(devices):
-    if subprocess.call(TEMPLATE_BUILD_RAID.format(' '.join(devices)),
+def build_raid(**kwargs):
+    device = kwargs['device']
+    members = kwargs['members']
+    count = len(members)
+    level = str(kwargs['level']) 
+    dev_list = ' '.join(members)
+
+    if subprocess.call(TEMPLATE_BUILD_RAID.format(device, count, level, 
+                                                  dev_list),
                        shell=True) != 0:
         raise RaidCreationError
     return True
 
-def build_pv():
-    #FIXME get some exceptions all up in here
-    if subprocess.call(CMD_BLANK_PARTITIONS, shell=True) != 0:
-      raise LvmCreationError
-    # THIS IS ALL BROKEN BECAUSE OF CHANGE TO TEMPLATE_FIRST_SECTOR
-    # AND TEMPLATE_LAST_SECTOR
-    first_sector = subprocess.check_output(CMD_GET_FIRST_SECTOR,
-            shell=True).rstrip()
-    last_sector = subprocess.check_output(CMD_GET_LAST_SECTOR,
-            shell=True).rstrip()
-    if subprocess.call(TEMPLATE_CREATE_PARTITION.format(first_sector,
-            last_sector, "md0"),shell=True):
-        raise LvmCreationError
-    if subprocess.call(TEMPLATE_PART_TYPE.format(LVM_HEX,"md0"),shell=True) != 0:
-        raise LvmCreationError
-    if subprocess.call(CMD_CREATE_PV,shell=True) != 0:
+def build_pv(device):
+    if subprocess.call(TEMPLATE_CREATE_PV.format(device),
+                       shell=True) != 0:
         raise LvmCreationError
 
-def drive_device(drive):
-    return (''.join(['/dev/',drive]))
+def clear_device(device):
+    # clearing the drive fails once, succeeds twice 
+    subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device),shell=True)
+    if subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device),shell=True) != 0:
+        raise PartitionClearError
+
+    return True
+
+def extend_vg(volume,target_device):
+    if subprocess.call(TEMPLATE_VGEXTEND.format(volume, target_device),
+                       shell=True) != 0:
+        raise ExtendVolumeError
+    return True
 
 def find_old_raids():
     devices = os.listdir('/dev/')    
@@ -118,34 +126,24 @@ def get_last_sector(device):
 
     return output
 
-def partition_drive(drive):
-    # clearing the drive fails once, succeeds twice 
-    subprocess.call(TEMPLATE_CLEAR_DRIVE.format(drive_device(drive)),shell=True)
-    if (subprocess.call(TEMPLATE_CLEAR_DRIVE.format(drive_device(drive)),
-        shell=True) != 0):
-        raise PartitionClearError
+def partition_device(**kwargs):
+    start = kwargs['start']
+    stop = kwargs['stop']
+    num = str(kwargs['num'])
+    part_type = kwargs['part_type']
+    device = kwargs['device']
 
-    start_sector = get_first_sector(drive_device(drive))
-    partition_size = ''.join(["+",str(RAID_PARTITION_GIGS),"g"])
-
-    command = []
-    command.append(TEMPLATE_CREATE_PARTITION.format(start_sector, 
-                   partition_size, drive))
-    command.append(TEMPLATE_PART_TYPE.format(RAID_HEX, drive))
-    
-    for c in command:
-        if subprocess.call(c, shell=True) != 0:
-            raise PartitionFailedError
+    subprocess.call(TEMPLATE_CREATE_PARTITION.format(
+                    num, start, stop, device), shell=True)
+    if (subprocess.call((TEMPLATE_PART_TYPE.format(num, part_type, device)),
+        shell=True)) != 0:
+        raise PartitionFailedError
+    return True
 
 def stop_array(raid_array):
     if subprocess.call(TEMPLATE_STOP_RAID.format(raid_array),
                        shell=True) != 0:
         raise RaidStopError
-
-def zero_superblock(partition):
-    command = "mdadm --zero-superblock /dev/{}".format(partition)
-    if subprocess.call(command,shell=True) != 0:
-        raise RaidDeletionError
 
 def main():
     for b in BINARY_DEPENDENCIES:
@@ -153,14 +151,46 @@ def main():
 
     arrays = find_old_raids()
     if len(arrays) > 0:
-        print("stopping existing raids.")
+        print("stopping existing RAID arrays.")
         for a in arrays:
             stop_existing_raid(a)
-    print("partitioning drives")
-    for d in SPINNING_DRIVES:
-       print drive_device(d)
-       partition_drive(d) 
-    print("building raid")
-    build_raid(RAID_DEVICES)
+    
+    print("clearing partitions")
+    for d in SPINNING_DRIVE_DEVICES:
+        print(d)
+        clear_device(d)
+
+    raid_size = str(RAID_PARTITION_GIGS) + "G"
+    print("partitioning drives for RAID")
+    for d in SPINNING_DRIVE_DEVICES:
+       print(d)
+       partition_device(num=1, start=get_first_sector(d), stop=raid_size,
+                        part_type=RAID_HEX, device=d) 
+
+    print("building RAID")
+    build_raid(device=LVM_RAID_DEVICE,members=RAID_DEVICES,level=10)
+
+    print("clearing RAID")
+    clear_device(LVM_RAID_DEVICE)
+
+    print("partitioning RAID for LVM")
+    partition_device(device=LVM_RAID_DEVICE, part_type=LVM_HEX,
+                     start=get_first_sector(LVM_RAID_DEVICE),
+                     stop=get_last_sector(LVM_RAID_DEVICE),
+                     num=1)
+
+    print("building physical LVM volume")
+    build_pv(LVM_VOLUME_DEVICE_TARGET)
+
+    #print("extending volume group")
+    #extend_vg(VOLUME_GROUP,LVM_VOLUME_DEVICE_TARGET)
+
+    #print("moving volume group to target")
+    #move_pv(LVM_VOLUME_DEVICE_SOURCE)
+
+    #print("removing installation flash device from volume group")
+    #reduce_vg(LVM_VOLUME_DEVICE_SOURCE)
+    
+    #print("resizing partition")
 
 main()
