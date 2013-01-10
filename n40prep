@@ -7,40 +7,45 @@ import subprocess
 BINARY_DEPENDENCIES = ["mdadm", "sgdisk", "pvcreate", "pvmove",
                        "vgextend", "vgreduce", "lvextend", "swapon",
                        "swapoff", "mkswap"]
-SPINNING_DRIVE_DEVICES = ['/dev/sda','/dev/sdb','/dev/sdc','/dev/sdd']
-RAID_DEVICES = [d + "1" for d in SPINNING_DRIVE_DEVICES]
-RAID_HEX = "fd00"
 LVM_HEX = "8e00"
 LVM_RAID_DEVICE = "/dev/md0"
 LVM_VOLUME_DEVICE_SOURCE = "/dev/sde5"
 LVM_VOLUME_DEVICE_TARGET = "/dev/md0p1"
+RAID_HEX = "fd00"
 RAID_PARTITION_GIGS = 16
-ROOT_PARTITION_GIGS = 24
-SWAP_PARTITION_GIGS = 2
+ROOT_PARTITION_GIGS = 29
 ROOT_VOLUME = "root"
+SPINNING_DRIVE_DEVICES = ['/dev/sda','/dev/sdb','/dev/sdc','/dev/sdd']
+SWAP_PARTITION_GIGS = 2
 SWAP_VOLUME = "swap_1"
 VOLUME_GROUP = "vg-os"
 
+RAID_DEVICES = [d + "1" for d in SPINNING_DRIVE_DEVICES]
+
 TEMPLATE_BUILD_RAID = "mdadm --create {} -v --raid-devices={} --level=raid{} {}"
-TEMPLATE_CREATE_PARTITION = "sgdisk -n {}:{}:{} {} 2>&1 > /dev/null"
-TEMPLATE_PART_TYPE = "sgdisk -t {}:{} {} 2>&1 > /dev/null"
-TEMPLATE_STOP_RAID = "mdadm --stop {}"
-TEMPLATE_CLEAR_DRIVE = "sgdisk -o {} 2>&1 > /dev/null"
-TEMPLATE_ZAP_DRIVE = "sgdisk -z {} > /dev/null"
-TEMPLATE_WHICH = "which {} 2>&1 > /dev/null"
+TEMPLATE_CLEAR_DRIVE = "sgdisk -o {}"
+TEMPLATE_CREATE_PARTITION = "sgdisk -n {}:{}:{} {}"
+TEMPLATE_CREATE_PV = "pvcreate {}"
 TEMPLATE_FIRST_SECTOR = "sgdisk -F {}"
 TEMPLATE_LAST_SECTOR = "sgdisk -E {}" 
-TEMPLATE_CREATE_PV = "pvcreate {}"
-TEMPLATE_VGEXTEND = "vgextend {} {}"
-TEMPLATE_PVMOVE = "pvmove {}"
-TEMPLATE_VGREDUCE = "vgreduce {} {}"
 TEMPLATE_LVEXTEND = "lvextend -L{}GB {}"
-TEMPLATE_RESIZE2FS = "resize2fs {}"
-TEMPLATE_SWAPON = "swapon {}"
-TEMPLATE_SWAPOFF = "swapoff {}"
 TEMPLATE_MKSWAP = "mkswap {}"
+TEMPLATE_PART_TYPE = "sgdisk -t {}:{} {}"
+TEMPLATE_PVMOVE = "pvmove {}"
+TEMPLATE_PVREMOVE = "pvremove {}"
+TEMPLATE_RESIZE2FS = "resize2fs {}"
+TEMPLATE_STOP_RAID = "mdadm --stop {}"
+TEMPLATE_SWAPOFF = "swapoff {}"
+TEMPLATE_SWAPON = "swapon {}"
+TEMPLATE_VGEXTEND = "vgextend {} {}"
+TEMPLATE_VGREDUCE = "vgreduce {} {}"
+TEMPLATE_WHICH = "which {}"
+TEMPLATE_ZAP_DRIVE = "sgdisk -z {}"
 
 class BinaryUnavailableError(Exception):
+    pass
+
+class RemovePhysicalVolume(Exception):
     pass
 
 class ExtendVolumeError(Exception):
@@ -123,6 +128,11 @@ def clear_device(device):
     if subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device),shell=True) != 0:
         raise PartitionClearError
 
+    return True
+
+def remove_pv(device):
+    if subprocess.call(TEMPLATE_PVREMOVE.format(device),shell=True) != 0:
+        raise RemovePhysicalVolumeError
     return True
 
 def extend_lv(volume, size):
@@ -262,6 +272,9 @@ def main():
     print("removing installation flash device from volume group")
     reduce_vg(VOLUME_GROUP, LVM_VOLUME_DEVICE_SOURCE)
     
+    print("removing physical volume on flash device")
+    remove_pv(LVM_VOLUME_DEVICE_SOURCE)
+
     root_partition = os.path.join('/dev',VOLUME_GROUP,ROOT_VOLUME)
     print("resizing root partition: " + root_partition)
     extend_lv(root_partition, ROOT_PARTITION_GIGS)
