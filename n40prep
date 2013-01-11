@@ -148,7 +148,7 @@ def build_pv(device):
     return True
 
 
-def clear_device(device):
+def clear_partitions(device):
     # clearing the drive fails once, succeeds twice
     subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device), shell=True)
     if subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device), shell=True) != 0:
@@ -308,7 +308,7 @@ def main():
     print("clearing partitions")
     for d in SPINNING_DRIVE_DEVICES:
         print(d)
-        clear_device(d)
+        clear_partitions(d)
 
     raid_size = str(RAID_PARTITION_GIGS) + "G"
     print("partitioning drives for RAID")
@@ -321,7 +321,7 @@ def main():
     build_raid(device=LVM_RAID_DEVICE, members=RAID_DEVICES, level=10)
 
     print("clearing RAID")
-    clear_device(LVM_RAID_DEVICE)
+    clear_partition(LVM_RAID_DEVICE)
 
     print("partitioning RAID for LVM")
     partition_device(device=LVM_RAID_DEVICE, part_type=LVM_HEX,
