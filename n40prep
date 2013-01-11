@@ -13,9 +13,10 @@ LVM_VOLUME_DEVICE_SOURCE = "/dev/sde5"
 LVM_VOLUME_DEVICE_TARGET = "/dev/md0p1"
 RAID_HEX = "fd00"
 RAID_PARTITION_GIGS = 16
-ROOT_PARTITION_GIGS = 29
+ROOT_PARTITION_GIGS = 24
 ROOT_VOLUME = "root"
 SPINNING_DRIVE_DEVICES = ['/dev/sda','/dev/sdb','/dev/sdc','/dev/sdd']
+SWAP_MINIMAL_PARTITION_GIGS = 1
 SWAP_PARTITION_GIGS = 2
 SWAP_VOLUME = "swap_1"
 VOLUME_GROUP = "vg-os"
@@ -28,7 +29,8 @@ TEMPLATE_CREATE_PARTITION = "sgdisk -n {}:{}:{} {}"
 TEMPLATE_CREATE_PV = "pvcreate {}"
 TEMPLATE_FIRST_SECTOR = "sgdisk -F {}"
 TEMPLATE_LAST_SECTOR = "sgdisk -E {}" 
-TEMPLATE_LVEXTEND = "lvextend -L{}GB {}"
+TEMPLATE_LVEXTEND = "lvextend -f -L{}GB {}"
+TEMPLATE_LVREDUCE = "lvreduce -f -L{}GB {}"
 TEMPLATE_MKSWAP = "mkswap {}"
 TEMPLATE_PART_TYPE = "sgdisk -t {}:{} {}"
 TEMPLATE_PVMOVE = "pvmove {}"
@@ -174,6 +176,17 @@ def get_last_sector(device):
 
     return output
 
+def get_swap_size():
+    # The size of swap in megabytes is in the output of the "free -m"
+    # command. 
+    output = (subprocess.check_output("free -m", shell=True)).split("\n")
+    # The interesting line is the one that begins with "Swap:"
+    swap_index = [i for i, 
+                  line in enumerate(output) if line.startswith("Swap")][0]
+    # Size of swap is the first column after the label
+    swap = output[swap_index].split()[1]
+    return int(swap)
+     
 def mkswap(device):
     if subprocess.call(TEMPLATE_MKSWAP.format(device),shell=True) != 0:
         raise MkswapError
@@ -196,6 +209,13 @@ def partition_device(**kwargs):
     if (subprocess.call((TEMPLATE_PART_TYPE.format(num, part_type, device)),
         shell=True)) != 0:
         raise PartitionFailedError
+    return True
+
+def reduce_lv(volume, size):
+    gigs = str(size)
+    if subprocess.call(TEMPLATE_LVREDUCE.format(gigs, volume), 
+                       shell=True) != 0:
+        raise ReduceVolumeError
     return True
 
 def reduce_vg(group, device):
@@ -230,6 +250,15 @@ def main():
     for b in BINARY_DEPENDENCIES:
         binary_available(b)
 
+    swap_size = get_swap_size()
+    swap_partition = os.path.join('/dev', VOLUME_GROUP, SWAP_VOLUME)
+    print("swapoff: " + swap_partition)
+    swapoff(swap_partition)
+
+    if (swap_size > (SWAP_MINIMAL_PARTITION_GIGS * 1024)):
+        print("shrinking swap: " + swap_partition)
+        reduce_lv(swap_partition, SWAP_MINIMAL_PARTITION_GIGS)
+
     arrays = find_old_raids()
     if len(arrays) > 0:
         print("stopping existing RAID arrays.")
@@ -260,6 +289,7 @@ def main():
                      stop=get_last_sector(LVM_RAID_DEVICE),
                      num=1)
 
+
     print("building physical LVM volume")
     build_pv(LVM_VOLUME_DEVICE_TARGET)
 
@@ -282,11 +312,7 @@ def main():
     print("resizing root filesystem: " + root_partition)
     resize_fs(root_partition)
 
-    swap_partition = os.path.join('/dev', VOLUME_GROUP, SWAP_VOLUME)
-    print("swapoff: " + swap_partition)
-    swapoff(swap_partition)
-
-    print("resizing swap: " + swap_partition)
+    print("growing swap: " + swap_partition)
     extend_lv(swap_partition, SWAP_PARTITION_GIGS)
 
     print("rebuilding swap: " + swap_partition)
