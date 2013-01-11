@@ -148,7 +148,7 @@ def build_pv(device):
     return True
 
 
-def clear_partitions(device):
+def clear_partition(device):
     # clearing the drive fails once, succeeds twice
     subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device), shell=True)
     if subprocess.call(TEMPLATE_CLEAR_DRIVE.format(device), shell=True) != 0:
