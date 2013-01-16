@@ -39,6 +39,7 @@ TEMPLATE_RESIZE2FS = "resize2fs {}"
 TEMPLATE_STOP_RAID = "mdadm --stop {}"
 TEMPLATE_SWAPOFF = "swapoff {}"
 TEMPLATE_SWAPON = "swapon {}"
+TEMPLATE_VGCREATE = "vgcreate {} {}"
 TEMPLATE_VGEXTEND = "vgextend {} {}"
 TEMPLATE_VGREDUCE = "vgreduce {} {}"
 TEMPLATE_WHICH = "which {}"
@@ -46,6 +47,10 @@ TEMPLATE_ZAP_DRIVE = "sgdisk -z {}"
 
 
 class BinaryUnavailableError(Exception):
+    pass
+
+
+class CreateVolumeGroupError(Exception):
     pass
 
 
@@ -156,6 +161,14 @@ def clear_partitions(device):
     return True
 
 
+def create_vg(vg, devices):
+    devstring = ' '.join(devices)
+    if subprocess.call(TEMPLATE_VGCREATE.format(vg, devstring),
+            shell=True) != 0:
+        raise CreateVolumeGroupError
+    return True
+
+
 def remove_pv(device):
     if subprocess.call(TEMPLATE_PVREMOVE.format(device), shell=True) != 0:
         raise RemovePhysicalVolumeError
@@ -175,6 +188,10 @@ def extend_vg(volume, target_device):
                        shell=True) != 0:
         raise ExtendVolumeGroupError
     return True
+
+
+def extract_drive_name(device):
+    return device.split('/')[-1]
 
 
 def find_old_raids():
@@ -359,6 +376,24 @@ def main():
 
     print("swapon: " + swap_partition)
     swapon(swap_partition)
+
+    print("creating swiftstack LVM partitions")
+    for d in SPINNING_DRIVE_DEVICES:
+        print(d)
+        partition_device(num=2, 
+                         start=get_first_sector(d),
+                         stop=get_last_sector(d),
+                         part_type=LVM_HEX, 
+                         device=d)
+
+    print("creating swiftstack LVM physical volumes")
+    for d in SPINNING_DRIVE_DEVICES:
+        build_pv(d + "2")
+
+    print("creating swiftstack LVM volume groups")
+    for d in SPINNING_DRIVE_DEVICES:
+        name = extract_drive_name(d)
+        create_vg("swiftstack-" + name, [(d + "2")])
 
 
 main()
