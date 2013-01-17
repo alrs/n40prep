@@ -6,7 +6,8 @@ import subprocess
 
 BINARY_DEPENDENCIES = ["mdadm", "sgdisk", "pvcreate", "pvmove",
                        "vgextend", "vgreduce", "lvextend", "swapon",
-                       "swapoff", "mkswap"]
+                       "swapoff", "mkswap", "partprobe"]
+DRIVES = ['sda','sdb','sdc','sdd']
 LVM_HEX = "8e00"
 LVM_RAID_DEVICE = "/dev/md0"
 LVM_VOLUME_DEVICE_SOURCE = "/dev/sde5"
@@ -15,13 +16,17 @@ RAID_HEX = "fd00"
 RAID_PARTITION_GIGS = 16
 ROOT_PARTITION_GIGS = 24
 ROOT_VOLUME = "root"
-SPINNING_DRIVE_DEVICES = ['/dev/sda', '/dev/sdb', '/dev/sdc', '/dev/sdd']
+PARTNUM_OS = 1
+PARTNUM_SWIFT = 2
 SWAP_MINIMAL_PARTITION_GIGS = 1
 SWAP_PARTITION_GIGS = 2
 SWAP_VOLUME = "swap_1"
+SWIFT_PARTITION_GIGS = 1847
 VOLUME_GROUP = "vg-os"
 
-RAID_DEVICES = [d + "1" for d in SPINNING_DRIVE_DEVICES]
+SPINNING_DRIVE_DEVICES = ["/dev/" + d in DRIVES]
+RAID_DEVICES = [d + str(PARTNUM_OS) for d in SPINNING_DRIVE_DEVICES]
+SWIFT_DEVICES = [d + str(PARTNUM_SWIFT) for d in SPINNING_DRIVE_DEVICES]
 
 TEMPLATE_BUILD_RAID = "mdadm --create {} -v --raid-devices={} --level=raid{} {}"
 TEMPLATE_CLEAR_DRIVE = "sgdisk -o {}"
@@ -29,6 +34,7 @@ TEMPLATE_CREATE_PARTITION = "sgdisk -n {}:{}:{} {}"
 TEMPLATE_CREATE_PV = "pvcreate {}"
 TEMPLATE_FIRST_SECTOR = "sgdisk -F {}"
 TEMPLATE_LAST_SECTOR = "sgdisk -E {}"
+TEMPLATE_LVCREATE = "lvcreate -L{}GB -n {} {}"
 TEMPLATE_LVEXTEND = "lvextend -f -L{}GB {}"
 TEMPLATE_LVREDUCE = "lvreduce -f -L{}GB {}"
 TEMPLATE_MKSWAP = "mkswap {}"
@@ -45,8 +51,14 @@ TEMPLATE_VGREDUCE = "vgreduce {} {}"
 TEMPLATE_WHICH = "which {}"
 TEMPLATE_ZAP_DRIVE = "sgdisk -z {}"
 
+CMD_PARTPROBE = "partprobe"
+
 
 class BinaryUnavailableError(Exception):
+    pass
+
+
+class CreateLogicalVolumeError(Exception):
     pass
 
 
@@ -79,6 +91,10 @@ class MovePhysicalVolumeError(Exception):
 
 
 class FormatFailedError(Exception):
+    pass
+
+
+class PartprobeError(Exception):
     pass
 
 
@@ -175,6 +191,14 @@ def remove_pv(device):
     return True
 
 
+def create_lv(volume, group, size):
+    gigs = str(size)
+    if subprocess.call(TEMPLATE_LVCREATE.format(gigs, volume, group),
+            shell=True) != 0:
+        raise CreateLogicalVolumeError
+    return True
+
+
 def extend_lv(volume, size):
     gigs = str(size)
     if subprocess.call(TEMPLATE_LVEXTEND.format(gigs, volume),
@@ -244,6 +268,12 @@ def mkswap(device):
 def move_pv(device):
     if (subprocess.call(TEMPLATE_PVMOVE.format(device), shell=True) != 0):
         raise MovePhysicalVolumeError
+    return True
+
+
+def partprobe():
+    if (subprocess.call(CMD_PARTPROBE, shell=True) != 0):
+        raise PartprobeError
     return True
 
 
@@ -377,23 +407,34 @@ def main():
     print("swapon: " + swap_partition)
     swapon(swap_partition)
 
+    print("running partprobe")
+    partprobe()
+
     print("creating swiftstack LVM partitions")
     for d in SPINNING_DRIVE_DEVICES:
         print(d)
-        partition_device(num=2, 
+        partition_device(num=2,
                          start=get_first_sector(d),
                          stop=get_last_sector(d),
-                         part_type=LVM_HEX, 
+                         part_type=LVM_HEX,
                          device=d)
 
+    print("running partprobe")
+    partprobe()
+
     print("creating swiftstack LVM physical volumes")
-    for d in SPINNING_DRIVE_DEVICES:
-        build_pv(d + "2")
+    for d in SWIFT_DEVICES:
+        build_pv(d)
 
     print("creating swiftstack LVM volume groups")
-    for d in SPINNING_DRIVE_DEVICES:
-        name = extract_drive_name(d)
-        create_vg("swiftstack-" + name, [(d + "2")])
+    for d in DRIVES:
+        create_vg("vg-swiftstack-" + name, [(d + str(PARTNUM_SWIFT))])
+
+    print("creating swiftstack LVM logical volumes")
+    for d in DRIVES:
+        lv = "lv-swiftstack-" + d
+        vg = "vg-swiftstack-" + d
+        create_lv(lv, vg, SWIFT_PARTITION_GIGS)
 
 
 main()
